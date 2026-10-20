@@ -1,0 +1,17 @@
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite databases (generated dynamically by the app)
+*.db
+master_portal.db
+company_*.db
+
+# Streamlit config and cache
+.streamlit/
+.cache/
+
+# OS generated files
+.DS_Store
+Thumbs.db
