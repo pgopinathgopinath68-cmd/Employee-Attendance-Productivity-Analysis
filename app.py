@@ -20,7 +20,10 @@ if "authenticated" not in st.session_state:
 if "theme_mode" not in st.session_state:
     st.session_state.theme_mode = "Light Mode"
 
-# Global Theme CSS Customization
+if "show_profile_drawer" not in st.session_state:
+    st.session_state.show_profile_drawer = False
+
+# Global Theme CSS Customization & Circular Avatar Styling
 if not st.session_state.authenticated or st.session_state.theme_mode == "Light Mode":
     st.markdown("""
         <style>
@@ -30,7 +33,7 @@ if not st.session_state.authenticated or st.session_state.theme_mode == "Light M
             color: #0f172a !important;
         }
         [data-testid="stSidebar"] {
-            background-color: rgba(255, 255, 255, 0.82) !important;
+            background-color: rgba(255, 255, 255, 0.88) !important;
             backdrop-filter: blur(18px);
             -webkit-backdrop-filter: blur(18px);
             border-right: 1px solid rgba(0, 0, 0, 0.08);
@@ -71,6 +74,14 @@ if not st.session_state.authenticated or st.session_state.theme_mode == "Light M
         }
         [data-testid="stMetricLabel"] p { color: #64748b !important; }
         [data-testid="stMetricValue"] { color: #2563eb !important; }
+        
+        /* Circular Avatar Styling */
+        .circle-avatar img {
+            border-radius: 50% !important;
+            object-fit: cover !important;
+            border: 3px solid #2563eb;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        }
         </style>
     """, unsafe_allow_html=True)
 else:
@@ -82,7 +93,7 @@ else:
             color: #f8fafc !important;
         }
         [data-testid="stSidebar"] {
-            background-color: rgba(30, 41, 59, 0.78) !important;
+            background-color: rgba(30, 41, 59, 0.85) !important;
             backdrop-filter: blur(18px);
             -webkit-backdrop-filter: blur(18px);
             border-right: 1px solid rgba(255, 255, 255, 0.1);
@@ -118,6 +129,14 @@ else:
         }
         [data-testid="stMetricLabel"] p { color: #94a3b8 !important; }
         [data-testid="stMetricValue"] { color: #38bdf8 !important; }
+        
+        /* Circular Avatar Styling */
+        .circle-avatar img {
+            border-radius: 50% !important;
+            object-fit: cover !important;
+            border: 3px solid #38bdf8;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -195,39 +214,38 @@ def init_company_db(company_name):
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
     
+    # Create employees table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS employees (
+            employee_id TEXT PRIMARY KEY,
+            full_name TEXT,
+            dob TEXT,
+            joined_date TEXT,
+            role TEXT,
+            department TEXT,
+            email TEXT,
+            phone TEXT,
+            full_address TEXT,
+            photo BLOB,
+            total_workdays INTEGER,
+            days_present INTEGER,
+            days_late INTEGER,
+            tasks_completed INTEGER,
+            avg_task_score REAL,
+            days_absent INTEGER,
+            absenteeism_rate REAL,
+            productivity_score REAL
+        )
+    ''')
+    
+    # Check and add missing columns automatically if updating an older database
     cursor.execute("PRAGMA table_info(employees)")
-    cols = [col[1] for col in cursor.fetchall()]
+    existing_columns = [col[1] for col in cursor.fetchall()]
     
-    expected_cols = [
-        'employee_id', 'full_name', 'dob', 'joined_date', 'role', 
-        'department', 'email', 'phone', 'city', 'total_workdays', 
-        'days_present', 'days_late', 'tasks_completed', 'avg_task_score', 
-        'days_absent', 'absenteeism_rate', 'productivity_score'
-    ]
-    
-    if not cols or len(cols) != len(expected_cols):
-        cursor.execute("DROP TABLE IF EXISTS employees")
-        cursor.execute('''
-            CREATE TABLE employees (
-                employee_id TEXT PRIMARY KEY,
-                full_name TEXT,
-                dob TEXT,
-                joined_date TEXT,
-                role TEXT,
-                department TEXT,
-                email TEXT,
-                phone TEXT,
-                city TEXT,
-                total_workdays INTEGER,
-                days_present INTEGER,
-                days_late INTEGER,
-                tasks_completed INTEGER,
-                avg_task_score REAL,
-                days_absent INTEGER,
-                absenteeism_rate REAL,
-                productivity_score REAL
-            )
-        ''')
+    if "full_address" not in existing_columns:
+        cursor.execute("ALTER TABLE employees ADD COLUMN full_address TEXT")
+    if "photo" not in existing_columns:
+        cursor.execute("ALTER TABLE employees ADD COLUMN photo BLOB")
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS employee_credentials (
@@ -287,17 +305,24 @@ def load_employees_from_db(company_name):
     conn.close()
     return df
 
-def save_employee_to_db(company_name, row, emp_password=None):
+def save_employee_to_db(company_name, row, emp_password=None, photo_bytes=None):
     init_company_db(company_name)
     db_file = f"company_{sanitize_name(company_name)}.db"
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
+    
+    if photo_bytes is None:
+        cursor.execute("SELECT photo FROM employees WHERE employee_id = ?", (row["employee_id"],))
+        res = cursor.fetchone()
+        if res and res[0]:
+            photo_bytes = res[0]
+
     cursor.execute('''
         INSERT OR REPLACE INTO employees (
-            employee_id, full_name, dob, joined_date, role, department, email, phone, city, 
+            employee_id, full_name, dob, joined_date, role, department, email, phone, full_address, photo,
             total_workdays, days_present, days_late, tasks_completed, 
             avg_task_score, days_absent, absenteeism_rate, productivity_score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         row["employee_id"], 
         row.get("full_name", ""),
@@ -307,7 +332,8 @@ def save_employee_to_db(company_name, row, emp_password=None):
         row["department"], 
         row.get("email", ""), 
         row.get("phone", ""), 
-        row.get("city", ""),
+        row.get("full_address", ""),
+        photo_bytes,
         row["total_workdays"], 
         row["days_present"], 
         row["days_late"], 
@@ -505,7 +531,6 @@ if not st.session_state.authenticated:
             new_comp = st.text_input("New Company Name", placeholder="e.g., Apex Global", key="reg_comp_name")
             company_master_pass = st.text_input("Company Master Password", type="password", placeholder="Set master password for company", key="reg_comp_pass")
             
-            # Dynamic Admin count OUTSIDE form so it updates instantly
             num_admins = st.number_input("Number of Admin Accounts Needed", min_value=1, max_value=5, value=1, step=1, key="reg_num_admins")
             
             st.markdown("#### Enter Admin User IDs & Passwords")
@@ -567,9 +592,48 @@ if st.sidebar.button("🚪 Log Out", use_container_width=True):
     st.session_state.logged_in_company = None
     st.session_state.user_role = None
     st.session_state.logged_in_user_id = None
+    st.session_state.show_profile_drawer = False
     st.rerun()
 
 st.sidebar.markdown("---")
+
+# EXPANDED BIG SIDEBAR DRAWER WHEN PROFILE IS CLICKED
+if st.session_state.show_profile_drawer:
+    st.sidebar.markdown("### 👤 Personal Profile Details")
+    if current_role == "Employee" and not df.empty:
+        my_row = df[df["employee_id"] == logged_user_id]
+        if not my_row.empty:
+            emp_data = my_row.iloc[0]
+            if emp_data.get("photo") is not None:
+                try:
+                    p_img = Image.open(BytesIO(emp_data["photo"]))
+                    st.sidebar.markdown('<div class="circle-avatar">', unsafe_allow_html=True)
+                    st.sidebar.image(p_img, width=130)
+                    st.sidebar.markdown('</div>', unsafe_allow_html=True)
+                except:
+                    st.sidebar.write("📷 *(No Photo)*")
+            else:
+                st.sidebar.write("📷 *(No Photo Uploaded)*")
+
+            st.sidebar.markdown(f"**Full Name:** {emp_data.get('full_name', 'N/A')}")
+            st.sidebar.markdown(f"**Employee ID:** {emp_data.get('employee_id')}")
+            st.sidebar.markdown(f"**Role:** {emp_data.get('role', 'N/A')}")
+            st.sidebar.markdown(f"**Department:** {emp_data.get('department', 'N/A')}")
+            st.sidebar.markdown(f"**Date of Birth:** {emp_data.get('dob', 'N/A')}")
+            st.sidebar.markdown(f"**Email:** {emp_data.get('email', 'N/A')}")
+            st.sidebar.markdown(f"**Phone:** {emp_data.get('phone', 'N/A')}")
+            st.sidebar.markdown(f"**Joined Date:** {emp_data.get('joined_date', 'N/A')}")
+            st.sidebar.markdown(f"**Full Address:**\n{emp_data.get('full_address', 'N/A')}")
+    else:
+        st.sidebar.markdown(f"**Admin ID:** `{logged_user_id}`")
+        st.sidebar.markdown(f"**Role:** Company Administrator")
+        st.sidebar.markdown(f"**Company:** {cur_comp}")
+        
+    if st.sidebar.button("❌ Close Profile Sidebar", use_container_width=True):
+        st.session_state.show_profile_drawer = False
+        st.rerun()
+        
+    st.sidebar.markdown("---")
 
 st.sidebar.markdown("### 🎨 Display Preferences")
 st.session_state.theme_mode = st.sidebar.radio("Appearance Theme", ["Light Mode", "Dark Mode"], index=0 if st.session_state.theme_mode=="Light Mode" else 1)
@@ -612,6 +676,8 @@ if current_role == "Admin":
             quick_pass = st.text_input("Password *", type="password", placeholder="Set password")
             quick_name = st.text_input("Full Name", placeholder="e.g., Rajesh Kumar")
             
+            quick_photo = st.file_uploader("Employee Photo", type=["jpg", "jpeg", "png"], key=f"q_photo_{cur_comp}")
+            
             quick_dob = st.date_input(
                 "Date of Birth", 
                 value=date(1995, 1, 1), 
@@ -623,13 +689,8 @@ if current_role == "Admin":
             quick_email = st.text_input("Email", placeholder="e.g., rajesh@company.com")
             quick_phone = st.text_input("Phone Number", placeholder="e.g., +91 9876543210")
             
-            quick_city = st.selectbox("District / City", [
-                "Mumbai", "Delhi", "Bengaluru", "Chennai", "Hyderabad", "Kolkata", 
-                "Pune", "Ahmedabad", "Jaipur", "Surat", "Lucknow", "Kanpur", 
-                "Nagpur", "Indore", "Thane", "Bhopal", "Visakhapatnam", "Patna", 
-                "Vadodara", "Ghaziabad", "Ludhiana", "Agra", "Nashik", "Ranchi", "Coimbatore", "Madurai",
-                "Gurugram", "Noida", "Chandigarh", "Kochi", "Thiruvananthapuram", "Mysuru", "Bhubaneswar"
-            ])
+            # FULL ADDRESS TEXT AREA FIELD
+            quick_address = st.text_area("Full Address", placeholder="Door No, Street Name, District, State, Pin Code", key=f"q_addr_{cur_comp}")
             quick_dept = st.selectbox("Department", ["Engineering", "Sales", "HR", "Marketing"], key=f"q_dept_{cur_comp}")
             
             quick_submit = st.form_submit_button("Save Employee", use_container_width=True)
@@ -641,6 +702,7 @@ if current_role == "Admin":
                     st.sidebar.error("Employee ID already exists.")
                 else:
                     push_history(df)
+                    photo_bytes = quick_photo.getvalue() if quick_photo else None
                     total_workdays = 22
                     new_row = {
                         "employee_id": quick_id,
@@ -651,7 +713,7 @@ if current_role == "Admin":
                         "department": quick_dept,
                         "email": quick_email,
                         "phone": quick_phone,
-                        "city": quick_city,
+                        "full_address": quick_address,
                         "total_workdays": total_workdays,
                         "days_present": 0,
                         "days_late": 0,
@@ -661,7 +723,7 @@ if current_role == "Admin":
                         "absenteeism_rate": 100.0,
                         "productivity_score": 0.0
                     }
-                    save_employee_to_db(cur_comp, new_row, emp_password=quick_pass)
+                    save_employee_to_db(cur_comp, new_row, emp_password=quick_pass, photo_bytes=photo_bytes)
                     st.sidebar.success(f"Created '{quick_id}' successfully!")
                     st.rerun()
 
@@ -673,8 +735,9 @@ if current_role == "Admin":
             current_row = df[df["employee_id"] == update_id].iloc[0]
             dept_list = ["Engineering", "Sales", "HR", "Marketing"]
             curr_dept_idx = dept_list.index(current_row["department"]) if current_row["department"] in dept_list else 0
-            
+
             update_name = st.text_input("Full Name", value=str(current_row.get("full_name", "")), key=f"up_name_{cur_comp}")
+            update_photo_file = st.file_uploader("Update Employee Photo", type=["jpg", "jpeg", "png"], key=f"up_photo_{cur_comp}")
             
             curr_dob = parse_date_safely(current_row.get("dob", ""), date(1995, 1, 1))
             curr_joined = parse_date_safely(current_row.get("joined_date", ""), date.today())
@@ -697,7 +760,9 @@ if current_role == "Admin":
             update_role = st.text_input("Role / Designation", value=str(current_row.get("role", "")), key=f"up_role_{cur_comp}")
             update_email = st.text_input("Email", value=str(current_row.get("email", "")), key=f"up_email_{cur_comp}")
             update_phone = st.text_input("Phone Number", value=str(current_row.get("phone", "")), key=f"up_phone_{cur_comp}")
-            update_city = st.text_input("City / District", value=str(current_row.get("city", "")), key=f"up_city_{cur_comp}")
+            
+            # FULL ADDRESS FIELD FOR UPDATE
+            update_address = st.text_area("Full Address", value=str(current_row.get("full_address", "")), key=f"up_addr_{cur_comp}")
             update_dept = st.selectbox("Department", dept_list, index=curr_dept_idx, key=f"up_dept_{cur_comp}")
             
             update_total_workdays = st.number_input("Total Workdays", min_value=1, max_value=31, value=int(current_row["total_workdays"]), key=f"up_total_days_{cur_comp}")
@@ -712,6 +777,8 @@ if current_role == "Admin":
                 absenteeism_rate = round((days_absent / update_total_workdays) * 100, 2) if update_total_workdays > 0 else 0.0
                 productivity_score = round((update_tasks * 0.6) + (update_score * 0.4), 2)
                 
+                updated_photo_bytes = update_photo_file.getvalue() if update_photo_file else None
+                
                 updated_row = {
                     "employee_id": update_id,
                     "full_name": update_name,
@@ -721,7 +788,7 @@ if current_role == "Admin":
                     "department": update_dept,
                     "email": update_email,
                     "phone": update_phone,
-                    "city": update_city,
+                    "full_address": update_address,
                     "total_workdays": update_total_workdays,
                     "days_present": update_present,
                     "days_late": update_late,
@@ -731,7 +798,7 @@ if current_role == "Admin":
                     "absenteeism_rate": absenteeism_rate,
                     "productivity_score": productivity_score
                 }
-                save_employee_to_db(cur_comp, updated_row)
+                save_employee_to_db(cur_comp, updated_row, photo_bytes=updated_photo_bytes)
                 st.sidebar.success(f"Updated '{update_id}'!")
                 st.rerun()
         else:
@@ -762,14 +829,17 @@ else:
     st.sidebar.info(f"👤 **Employee Portal Access**\nYou can view your complete personal profile, performance metrics, notices, and submit leave requests.")
     filtered_df = df[df["employee_id"] == logged_user_id]
 
-# Render Top Dynamic Header
-header_col1, header_col2 = st.columns([1, 8])
+# ==========================================
+# HEADER WITH TOP-RIGHT CIRCULAR PROFILE BUTTON
+# ==========================================
+header_col1, header_col2, header_col3 = st.columns([1, 6, 2])
+
 with header_col1:
     db_logo_bytes = load_company_logo_from_db(cur_comp)
     if db_logo_bytes is not None:
         try:
             logo_img = Image.open(BytesIO(db_logo_bytes))
-            st.image(logo_img, width=80)
+            st.image(logo_img, width=75)
         except:
             st.write("📊")
     else:
@@ -781,18 +851,30 @@ with header_col2:
     else:
         st.title(f"{cur_comp} - Employee Workspace")
 
+with header_col3:
+    user_display_name = logged_user_id
+    if current_role == "Employee" and not df.empty:
+        my_row = df[df["employee_id"] == logged_user_id]
+        if not my_row.empty:
+            user_display_name = my_row.iloc[0].get("full_name") or logged_user_id
+
+    # CLICKING THIS BUTTON OPENS/TOGGLES THE BIG PROFILE SIDEBAR
+    if st.button(f"👤 {user_display_name} (View Profile)", use_container_width=True, key="btn_open_profile_drawer"):
+        st.session_state.show_profile_drawer = not st.session_state.show_profile_drawer
+        st.rerun()
+
 st.markdown(f"Active Workspace: **{current_role} Mode** | Organization: **{cur_comp}**")
 
 # --- CREATE APPLICATION TABS ---
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Dashboard & Profile", 
+    "📊 Dashboard & Performance", 
     "📅 Daily Attendance", 
     "📢 Announcements", 
     "📝 Leave Requests"
 ])
 
 # ==========================================
-# TAB 1: DASHBOARD & PROFILE
+# TAB 1: DASHBOARD & PERFORMANCE
 # ==========================================
 with tab1:
     col1, col2, col3, col4 = st.columns(4)
@@ -830,33 +912,36 @@ with tab1:
                 st.pyplot(fig2)
 
             st.subheader("📋 Detailed Employee Records Table")
-            st.dataframe(filtered_df, use_container_width=True)
+            display_cols = [c for c in filtered_df.columns if c != "photo"]
+            st.dataframe(filtered_df[display_cols], use_container_width=True)
 
             st.markdown("---")
-            st.subheader("🔍 Employee Profile & Performance Viewer")
-            selected_emp_profile = st.selectbox("Select Employee ID to View Details", options=filtered_df["employee_id"].unique(), key=f"profile_sel_{cur_comp}")
+            st.subheader("🔍 Employee Performance Details")
+            selected_emp_profile = st.selectbox("Select Employee ID to View Performance", options=filtered_df["employee_id"].unique(), key=f"profile_sel_{cur_comp}")
             
             if selected_emp_profile:
                 emp_data = filtered_df[filtered_df["employee_id"] == selected_emp_profile].iloc[0]
                 
-                col_pers, col_prof = st.columns(2)
-                
-                with col_pers:
-                    st.markdown("### 👤 Personal Details")
-                    st.write(f"**Full Name:** {emp_data.get('full_name', 'N/A')}")
-                    st.write(f"**Employee ID:** {emp_data['employee_id']}")
-                    st.write(f"**Date of Birth (DOB):** {emp_data.get('dob', 'N/A')}")
-                    st.write(f"**Role / Designation:** {emp_data.get('role', 'N/A')}")
-                    st.write(f"**Email Address:** {emp_data.get('email', 'N/A')}")
-                    st.write(f"**Phone Number:** {emp_data.get('phone', 'N/A')}")
-                    st.write(f"**Joined Date:** {emp_data.get('joined_date', 'N/A')}")
-                    st.write(f"**Location / District:** {emp_data.get('city', 'N/A')}")
+                col_img, col_prof = st.columns([1, 3])
+                with col_img:
+                    if emp_data.get("photo") is not None:
+                        try:
+                            e_img = Image.open(BytesIO(emp_data["photo"]))
+                            st.markdown('<div class="circle-avatar">', unsafe_allow_html=True)
+                            st.image(e_img, caption=emp_data.get("full_name", selected_emp_profile), width=140)
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        except:
+                            st.write("📷 *(Photo Error)*")
+                    else:
+                        st.write("📷 *(No Photo)*")
 
                 with col_prof:
                     st.markdown("### 💼 Professional Details & Performance")
                     st.write(f"**Employee ID:** {emp_data['employee_id']}")
+                    st.write(f"**Full Name:** {emp_data.get('full_name', 'N/A')}")
                     st.write(f"**Department:** {emp_data['department']}")
                     st.write(f"**Role / Designation:** {emp_data.get('role', 'N/A')}")
+                    st.write(f"**Full Address:** {emp_data.get('full_address', 'N/A')}")
                     st.write(f"**Days of Attendance:** {emp_data['days_present']} Present / {emp_data['total_workdays']} Total Workdays")
                     st.write(f"**Days Late:** {emp_data['days_late']}")
                     st.write(f"**Tasks Completed:** {emp_data['tasks_completed']}")
@@ -875,26 +960,26 @@ with tab1:
 
         if total_emps > 0:
             emp_data = filtered_df.iloc[0]
-            st.subheader(f"👤 Employee Details for {emp_data.get('full_name', logged_user_id)} ({emp_data['employee_id']})")
+            st.subheader(f"💼 Professional Performance Details for {emp_data.get('full_name', logged_user_id)}")
             
-            col_pers, col_prof = st.columns(2)
-            
-            with col_pers:
-                st.markdown("### 👤 Personal Details")
-                st.write(f"**Full Name:** {emp_data.get('full_name', 'N/A')}")
-                st.write(f"**Employee ID:** {emp_data['employee_id']}")
-                st.write(f"**Date of Birth (DOB):** {emp_data.get('dob', 'N/A')}")
-                st.write(f"**Role / Designation:** {emp_data.get('role', 'N/A')}")
-                st.write(f"**Email Address:** {emp_data.get('email', 'N/A')}")
-                st.write(f"**Phone Number:** {emp_data.get('phone', 'N/A')}")
-                st.write(f"**Joined Date:** {emp_data.get('joined_date', 'N/A')}")
-                st.write(f"**Location / District:** {emp_data.get('city', 'N/A')}")
+            col_img, col_prof = st.columns([1, 3])
+            with col_img:
+                if emp_data.get("photo") is not None:
+                    try:
+                        e_img = Image.open(BytesIO(emp_data["photo"]))
+                        st.markdown('<div class="circle-avatar">', unsafe_allow_html=True)
+                        st.image(e_img, caption=emp_data.get("full_name", logged_user_id), width=150)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    except:
+                        st.write("📷 *(Photo Error)*")
+                else:
+                    st.write("📷 *(No Photo Uploaded)*")
 
             with col_prof:
-                st.markdown("### 💼 Professional Details & Performance")
                 st.write(f"**Employee ID:** {emp_data['employee_id']}")
                 st.write(f"**Department:** {emp_data['department']}")
                 st.write(f"**Role / Designation:** {emp_data.get('role', 'N/A')}")
+                st.write(f"**Full Address:** {emp_data.get('full_address', 'N/A')}")
                 st.write(f"**Days of Attendance:** {emp_data['days_present']} Present / {emp_data['total_workdays']} Total Workdays")
                 st.write(f"**Days Late:** {emp_data['days_late']}")
                 st.write(f"**Tasks Completed:** {emp_data['tasks_completed']}")
@@ -1029,6 +1114,4 @@ with tab4:
             st.dataframe(my_leaves, use_container_width=True)
         else:
             st.info("You have not submitted any leave applications yet.")
-
-
 
